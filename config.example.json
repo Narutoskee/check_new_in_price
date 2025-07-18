@@ -1,0 +1,4 @@
+{
+    "price_file_path": "PATH_TO_PRICE_FILE.xlsx",
+    "site_file_path": "PATH_TO_SITE_FILE.csv"
+}

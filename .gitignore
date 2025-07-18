@@ -1,0 +1,21 @@
+/Список есть в базе - нет на сайте.xlsx
+/не находит в прайсе _удаление.xlsx
+/есть в прайсе нет на сайте.xlsx
+/Выгрузка с сайта проверить категории.xlsx
+/~$не находит в прайсе _удаление.xlsx
+/sssUpdate.xlsx
+/site_prod.csv
+/new_items.xlsx
+/missing_on_site.xlsx
+/missing_in_price.xlsx
+/app.log
+/preformat/
+/paths.json
+# PyCharm
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
