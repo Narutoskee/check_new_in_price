@@ -3,16 +3,42 @@ import pandas as pd
 import json
 import logging
 
+
 class DataComparer:
-    def __init__(self, paths_file, log_file):
-        self.website_list = None
-        self.price_list = None
-        self.missing_in_price = None
-        self.missing_on_site = None
-        with open(paths_file, 'r', encoding="utf-8") as f:
-            self.paths = json.load(f)
+    def __init__(self, config_path, log_file):
+        with open(config_path, 'r', encoding="utf-8") as f:
+            self.config = json.load(f)
+
         logging.basicConfig(filename=log_file, level=logging.INFO,
                             format='%(asctime)s - %(levelname)s - %(message)s')
+
+        self.price_list = None
+        self.website_list = None
+        self.missing_in_price = set()
+        self.missing_on_site = set()
+
+        # Пути к файлам
+        self.price_file_path = self.config.get("price_file_path")
+        self.site_file_path = self.config.get("site_file_path")
+
+        # Названия колонок
+        columns = self.config.get("columns", {})
+        self.price_column = columns.get("price_column", "Код")
+        self.site_column = columns.get("site_column", "IE_XML_ID")
+        self.secondary_column = columns.get("secondary_match_column", "IP_PROP2090")
+        self.delete_col = columns.get("delete_column", "Удалить")
+        self.stock_col = columns.get("stock_column", "Главный Склад")
+        self.status_col = columns.get("status_column", "Статус")
+
+        # Фильтрация
+        self.filter_rules = self.config.get("filter_rules", {}).get("exclude_if", [])
+
+        # Выходные файлы
+        self.output_files = self.config.get("output_files", {
+            "missing_on_site": "missing_on_site.xlsx",
+            "missing_in_price": "missing_in_price.xlsx",
+            "new_items": "new_items.xlsx"
+        })
 
     @staticmethod
     def load_data(file_path, separator=";", encoding="utf-8"):
@@ -27,42 +53,30 @@ class DataComparer:
             logging.error(f"Error loading data from {file_path}: {e}")
             raise
 
-    def compare_data(self, price_column_name, site_column_name):
+    def compare_data(self):
         logging.info('Comparing data')
-        price_set = set(self.price_list[price_column_name])
-        website_set = set(self.website_list[site_column_name])
+        price_set = set(self.price_list[self.price_column])
+        site_set = set(self.website_list[self.site_column])
 
-        # Первичная проверка по IE_XML_ID
-        initial_missing_in_price = website_set - price_set
-        initial_missing_on_site = price_set - website_set
+        initial_missing_in_price = site_set - price_set
+        initial_missing_on_site = price_set - site_set
 
         secondary_matches = 0
         final_missing_in_price = set()
         final_missing_on_site = set()
 
-        # Проверяем наличие столбца IP_PROP2090
-        has_ip_prop2090 = 'IP_PROP2090' in self.website_list.columns
-
-        if not has_ip_prop2090:
-            logging.warning("Column 'IP_PROP2090' is missing in website_list. Skipping secondary comparison.")
-            # Вторичной проверки не будет
+        if self.secondary_column not in self.website_list.columns:
+            logging.warning(f"Column '{self.secondary_column}' not found. Skipping secondary comparison.")
             final_missing_in_price = initial_missing_in_price
             final_missing_on_site = initial_missing_on_site
         else:
-            # Проверяем товары, которых нет в прайсе
             for item in initial_missing_in_price:
-                site_row = self.website_list[self.website_list[site_column_name] == item]
-
+                site_row = self.website_list[self.website_list[self.site_column] == item]
                 if not site_row.empty:
-                    ip_prop2090_value = site_row['IP_PROP2090'].iloc[0]
-
-                    if pd.notna(ip_prop2090_value):
-                        prop2090_codes = ip_prop2090_value.split('+')
-                        prop2090_codes = [code.strip() for code in prop2090_codes]
-
-                        found_match = all(any(price_code.strip() == prop_code for price_code in price_set)
-                                          for prop_code in prop2090_codes)
-
+                    value = site_row[self.secondary_column].iloc[0]
+                    if pd.notna(value):
+                        codes = [code.strip() for code in value.split('+')]
+                        found_match = all(any(code == p for p in price_set) for code in codes)
                         if found_match:
                             secondary_matches += 1
                         else:
@@ -72,17 +86,14 @@ class DataComparer:
                 else:
                     final_missing_in_price.add(item)
 
-            # Проверяем товары, которых нет на сайте
             for item in initial_missing_on_site:
                 found = False
-                for prop2090 in self.website_list['IP_PROP2090'].dropna():
-                    if pd.notna(prop2090):
-                        codes = prop2090.split('+')
-                        if any(item.strip() == code.strip() for code in codes):
-                            found = True
-                            secondary_matches += 1
-                            break
-
+                for value in self.website_list[self.secondary_column].dropna():
+                    codes = [code.strip() for code in value.split('+')]
+                    if item in codes:
+                        found = True
+                        secondary_matches += 1
+                        break
                 if not found:
                     final_missing_on_site.add(item)
 
@@ -91,64 +102,66 @@ class DataComparer:
 
         logging.info(f'Initial mismatches: {len(initial_missing_in_price) + len(initial_missing_on_site)}')
         logging.info(f'Secondary matches found: {secondary_matches}')
-        logging.info(f'Final missing in price list: {len(self.missing_in_price)} items')
-        logging.info(f'Final missing on site: {len(self.missing_on_site)} items')
+        logging.info(f'Final missing in price: {len(self.missing_in_price)}')
+        logging.info(f'Final missing on site: {len(self.missing_on_site)}')
 
-    def save_results(self, price_column_name, site_column_name):
+    def apply_filters(self):
+        logging.info('Applying filters')
+        df = self.price_list[self.price_list[self.price_column].isin(self.missing_on_site)]
+
+        base_condition = (df[self.delete_col] == "Нет") | df[self.delete_col].isna()
+        exclusion_mask = pd.Series([False] * len(df), index=df.index)
+
+        for rule in self.filter_rules:
+            status_values = rule.get("status", [])
+            stock_lt = rule.get("stock_less_than")
+            stock_eq = rule.get("stock_equals")
+
+            status_mask = df[self.status_col].isin(status_values)
+
+            if stock_lt is not None:
+                stock_mask = df[self.stock_col] < stock_lt
+            elif stock_eq is not None:
+                stock_mask = df[self.stock_col] == stock_eq
+            else:
+                stock_mask = pd.Series([True] * len(df), index=df.index)
+
+            exclusion_mask |= (status_mask & stock_mask)
+
+        filtered_df = df[base_condition & ~exclusion_mask]
+        return filtered_df
+
+    def save_results(self):
         logging.info('Saving results')
 
-        # Фильтрация missing_on_site по условиям
-        missing_df = self.price_list[self.price_list[price_column_name].isin(self.missing_on_site)]
+        filtered_df = self.apply_filters()
+        filtered_df.to_excel(self.output_files["missing_on_site"], index=False)
 
-        # Основной фильтр
-        filtered_df = missing_df[
-            # Базовые условия
-            ((missing_df['Удалить'] == 'Нет') | missing_df['Удалить'].isna()) &
-
-            # Фильтр по статусам и остаткам
-            ~(
-                # Исключаем товары с остатком < 10 и определенными статусами
-                    ((missing_df['Главный Склад'] < 10) &
-                     missing_df['Статус'].isin(['Не указана', 'Перекуп', 'Снят с производства', 'Сборка'])) |
-
-                    # Исключаем акционные товары с остатком < 5
-                    ((missing_df['Статус'] == 'Акция') & (missing_df['Главный Склад'] < 5)) |
-
-                    # Исключаем товары "Распродаем" или "Под заказ" с остатком < 10
-                    ((missing_df['Статус'].isin(['Распродаем', 'Под заказ'])) &
-                     (missing_df['Главный Склад'] < 10)) |
-
-                    # Исключаем товары "На складе" с нулевым остатком
-                    ((missing_df['Статус'] == 'На складе') & (missing_df['Главный Склад'] == 0))
-            )
-            ]
-
-        # Сохраняем основной файл
-        filtered_df.to_excel('missing_on_site.xlsx', index=False)
-
-        # Сохраняем новинки в отдельный файл
-        new_items_df = missing_df[missing_df['Статус'] == 'Новинка']
+        new_items_df = self.price_list[
+            (self.price_list[self.price_column].isin(self.missing_on_site)) &
+            (self.price_list[self.status_col] == "Новинка")
+        ]
         if not new_items_df.empty:
-            new_items_df.to_excel('new_items.xlsx', index=False)
+            new_items_df.to_excel(self.output_files["new_items"], index=False)
 
-        # Сохраняем missing_in_price без изменений
-        missing_in_price_df = self.website_list[self.website_list[site_column_name].isin(self.missing_in_price)]
-        missing_in_price_df.to_excel('missing_in_price.xlsx', index=False)
+        missing_in_price_df = self.website_list[
+            self.website_list[self.site_column].isin(self.missing_in_price)
+        ]
+        missing_in_price_df.to_excel(self.output_files["missing_in_price"], index=False)
 
-        logging.info(f'Results saved successfully. Filtered items: {len(filtered_df)}')
-        if not new_items_df.empty:
-            logging.info(f'New items found: {len(new_items_df)}')
+        logging.info(f'Results saved. Filtered: {len(filtered_df)}, New items: {len(new_items_df)}')
 
-    def run(self, price_file_path_key, site_file_path_key, price_column_name, site_column_name):
+    def run(self):
         logging.info('Starting comparison')
         try:
-            self.price_list = DataComparer.load_data(self.paths[price_file_path_key])
-            self.website_list = DataComparer.load_data(self.paths[site_file_path_key])
-            self.compare_data(price_column_name, site_column_name)
-            self.save_results(price_column_name, site_column_name)
+            self.price_list = self.load_data(self.price_file_path)
+            self.website_list = self.load_data(self.site_file_path)
+            self.compare_data()
+            self.save_results()
             logging.info('Comparison completed successfully')
         except Exception as e:
             logging.error(f"Error during comparison: {e}")
+
 
 # Пример использования
 # comparer = DataComparer('paths.json', 'app.log')

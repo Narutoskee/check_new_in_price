@@ -1,4 +1,3 @@
-#main.py
 from pathlib import Path
 from DataComparer import DataComparer
 from Logger import Logger
@@ -7,20 +6,21 @@ import traceback
 
 
 def main():
-    Logger.setup_logging('app.log', 50000, True)  # Настраиваем логирование
-    start_time = time.time()  # Запоминаем время начала выполнения
+    Logger.setup_logging('app.log', 50000, True)
+    start_time = time.time()
     Logger.log_info('Start processing')
 
     try:
-        paths_file = Path('paths.json').resolve()  # Разрешение абсолютного пути
-        if not paths_file.exists():
-            Logger.log_error(f"Configuration file not found: {paths_file}")
-            return
-        comparer = DataComparer(paths_file, 'app.log')
-        comparer.run('price_file_path', 'site_file_path', 'Код', 'IE_XML_ID')
+        config_path = Path('paths.json').resolve()
 
-        end_time = time.time()  # Запоминаем время окончания выполнения
-        elapsed_time = end_time - start_time  # Вычисляем затраченное время
+        if not config_path.exists():
+            Logger.log_error(f"Configuration file not found: {config_path}")
+            return
+
+        comparer = DataComparer(config_path, 'app.log')
+        comparer.run()
+
+        elapsed_time = time.time() - start_time
         Logger.log_info('Processing completed successfully')
         Logger.log_info(f'Elapsed time: {elapsed_time:.2f} seconds')
 
